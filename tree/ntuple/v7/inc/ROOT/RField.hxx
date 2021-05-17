@@ -37,6 +37,7 @@
 #include <type_traits>
 #include <typeinfo>
 #if __cplusplus >= 201703L
+#include <optional>
 #include <variant>
 #endif
 #include <vector>
@@ -403,6 +404,40 @@ public:
 };
 
 #if __cplusplus >= 201703L
+/// The generic field for std::optional types
+class ROptionalField : public Detail::RFieldBase {
+private:
+   size_t fMaxItemSize = 0;
+   size_t fMaxAlignment = 1;
+   /// In the std::variant memory layout, at which byte number is the index stored
+   size_t fTagOffset = 0;
+   std::vector<ClusterSize_t::ValueType> fNWritten;
+
+   static std::string GetTypeList(const std::vector<Detail::RFieldBase *> &itemFields);
+   /// Extracts the index from an std::variant and transforms it into the 1-based index used for the switch column
+   std::uint32_t GetTag(void *variantPtr) const;
+   void SetTag(void *variantPtr, std::uint32_t tag) const;
+
+protected:
+   std::unique_ptr<Detail::RFieldBase> CloneImpl(std::string_view newName) const final;
+   void AppendImpl(const Detail::RFieldValue& value) final;
+   void ReadGlobalImpl(NTupleSize_t globalIndex, Detail::RFieldValue *value) final;
+
+public:
+   ROptionalField(std::string_view fieldName, std::unique_ptr<Detail::RFieldBase> itemField);
+   ROptionalField(ROptionalField &&other) = default;
+   ROptionalField& operator =(ROptionalField &&other) = default;
+   ~ROptionalField() = default;
+
+   void GenerateColumnsImpl() final;
+   using Detail::RFieldBase::GenerateValue;
+   Detail::RFieldValue GenerateValue(void *where) override;
+   void DestroyValue(const Detail::RFieldValue &value, bool dtorOnly = false) final;
+   Detail::RFieldValue CaptureValue(void *where) final;
+   size_t GetValueSize() const final;
+   size_t GetAlignment() const final { return fMaxAlignment; }
+};
+
 /// The generic field for std::variant types
 class RVariantField : public Detail::RFieldBase {
 private:
@@ -1116,6 +1151,28 @@ public:
 
 
 #if __cplusplus >= 201703L
+template <typename ItemT>
+class RField<std::optional<ItemT>> : public ROptionalField {
+   using ContainerT = typename std::optional<ItemT>;
+public:
+   static std::string TypeName() { return "std::optional<" + RField<ItemT>::TypeName() + ">"; }
+   explicit RField(std::string_view name)
+      : ROptionalField(name, std::make_unique<RField<ItemT>>(RField<ItemT>::TypeName())) {}
+   RField(RField&& other) = default;
+   RField& operator =(RField&& other) = default;
+   ~RField() = default;
+
+   using Detail::RFieldBase::GenerateValue;
+   template <typename... ArgsT>
+   ROOT::Experimental::Detail::RFieldValue GenerateValue(void *where, ArgsT&&... args)
+   {
+      return Detail::RFieldValue(this, static_cast<ContainerT*>(where), std::forward<ArgsT>(args)...);
+   }
+   ROOT::Experimental::Detail::RFieldValue GenerateValue(void *where) final {
+      return GenerateValue(where, ContainerT());
+   }
+};
+
 template <typename... ItemTs>
 class RField<std::variant<ItemTs...>> : public RVariantField {
    using ContainerT = typename std::variant<ItemTs...>;

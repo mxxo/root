@@ -116,6 +116,7 @@ std::string GetNormalizedType(const std::string &typeName) {
    if (normalizedType == "string") normalizedType = "std::string";
    if (normalizedType.substr(0, 7) == "vector<") normalizedType = "std::" + normalizedType;
    if (normalizedType.substr(0, 6) == "array<") normalizedType = "std::" + normalizedType;
+   if (normalizedType.substr(0, 9) == "optional<") normalizedType = "std::" + normalizedType;
    if (normalizedType.substr(0, 8) == "variant<") normalizedType = "std::" + normalizedType;
 
    return normalizedType;
@@ -196,6 +197,11 @@ ROOT::Experimental::Detail::RFieldBase::Create(const std::string &fieldName, con
       result = std::make_unique<RArrayField>(fieldName, itemField.Unwrap(), arrayLength);
    }
 #if __cplusplus >= 201703L
+   if (normalizedType.substr(0, 14) == "std::optional<") {
+      std::string itemTypeName = normalizedType.substr(14, normalizedType.length() - 15);
+      auto itemField = Create(GetNormalizedType(itemTypeName), itemTypeName);
+      result = std::make_unique<ROptionalField>(fieldName, itemField.Unwrap());
+   }
    if (normalizedType.substr(0, 13) == "std::variant<") {
       auto innerTypes = TokenizeTypeList(normalizedType.substr(13, normalizedType.length() - 14));
       std::vector<RFieldBase *> items;
@@ -1125,6 +1131,100 @@ void ROOT::Experimental::RArrayField::AcceptVisitor(Detail::RFieldVisitor &visit
 //------------------------------------------------------------------------------
 
 #if __cplusplus >= 201703L
+ROOT::Experimental::ROptionalField::ROptionalField(std::string_view fieldName,
+   std::unique_ptr<Detail::RFieldBase> itemField)
+   : ROOT::Experimental::Detail::RFieldBase(fieldName,
+      "std::optional<" + itemField->GetType() + ">", ENTupleStructure::kVariant,
+      false /* isSimple */)
+{
+   Attach(std::move(itemField));
+}
+
+std::unique_ptr<ROOT::Experimental::Detail::RFieldBase>
+ROOT::Experimental::ROptionalField::CloneImpl(std::string_view newName) const
+{
+   auto newItemField = fSubFields[0]->Clone(fSubFields[0]->GetName());
+   return std::make_unique<ROptionalField>(newName, std::move(newItemField));
+}
+
+std::uint32_t ROOT::Experimental::ROptionalField::GetTag(void *variantPtr) const
+{
+   auto index = *(reinterpret_cast<char *>(variantPtr) + fTagOffset);
+   return (index < 0) ? 0 : index + 1;
+}
+
+void ROOT::Experimental::ROptionalField::SetTag(void *variantPtr, std::uint32_t tag) const
+{
+   auto index = reinterpret_cast<char *>(variantPtr) + fTagOffset;
+   *index = static_cast<char>(tag - 1);
+}
+
+void ROOT::Experimental::ROptionalField::AppendImpl(const Detail::RFieldValue& value)
+{
+   auto tag = GetTag(value.GetRawPtr());
+   auto index = 0;
+   if (tag > 0) {
+      auto itemValue = fSubFields[tag - 1]->CaptureValue(value.GetRawPtr());
+      fSubFields[tag - 1]->Append(itemValue);
+      index = fNWritten[tag - 1]++;
+   }
+   RColumnSwitch varSwitch(ClusterSize_t(index), tag);
+   Detail::RColumnElement<RColumnSwitch, EColumnType::kSwitch> elemSwitch(&varSwitch);
+   fColumns[0]->Append(elemSwitch);
+}
+
+void ROOT::Experimental::ROptionalField::ReadGlobalImpl(NTupleSize_t globalIndex, Detail::RFieldValue *value)
+{
+   RClusterIndex variantIndex;
+   std::uint32_t tag;
+   fPrincipalColumn->GetSwitchInfo(globalIndex, &variantIndex, &tag);
+   R__ASSERT(tag > 0); // TODO(jblomer): deal with invalid variants
+
+   auto itemValue = fSubFields[tag - 1]->GenerateValue(value->GetRawPtr());
+   fSubFields[tag - 1]->Read(variantIndex, &itemValue);
+   SetTag(value->GetRawPtr(), tag);
+}
+
+void ROOT::Experimental::ROptionalField::GenerateColumnsImpl()
+{
+   RColumnModel modelSwitch(EColumnType::kSwitch, false);
+   fColumns.emplace_back(std::unique_ptr<Detail::RColumn>(
+      Detail::RColumn::Create<RColumnSwitch, EColumnType::kSwitch>(modelSwitch, 0)));
+   fPrincipalColumn = fColumns[0].get();
+}
+
+ROOT::Experimental::Detail::RFieldValue ROOT::Experimental::ROptionalField::GenerateValue(void *where)
+{
+   memset(where, 0, GetValueSize());
+   fSubFields[0]->GenerateValue(where);
+   SetTag(where, 1);
+   return Detail::RFieldValue(this, reinterpret_cast<unsigned char *>(where));
+}
+
+void ROOT::Experimental::ROptionalField::DestroyValue(const Detail::RFieldValue& value, bool dtorOnly)
+{
+   auto variantPtr = value.GetRawPtr();
+   auto tag = GetTag(variantPtr);
+   if (tag > 0) {
+      auto itemValue = fSubFields[tag - 1]->CaptureValue(variantPtr);
+      fSubFields[tag - 1]->DestroyValue(itemValue, true /* dtorOnly */);
+   }
+   if (!dtorOnly)
+      free(variantPtr);
+}
+
+ROOT::Experimental::Detail::RFieldValue ROOT::Experimental::ROptionalField::CaptureValue(void *where)
+{
+   return Detail::RFieldValue(true /* captureFlag */, this, where);
+}
+
+size_t ROOT::Experimental::ROptionalField::GetValueSize() const
+{
+   return fMaxItemSize + fMaxAlignment;  // TODO: fix for more than 255 items
+}
+
+//------------------------------------------------------------------------------
+
 std::string ROOT::Experimental::RVariantField::GetTypeList(const std::vector<Detail::RFieldBase *> &itemFields)
 {
    std::string result;

@@ -37,6 +37,7 @@ ROOT_ADD_GTEST(ntuple_view ntuple_view.cxx LIBRARIES ROOTDataFrame ROOTNTuple Ma
 ROOT_ADD_GTEST(ntuple_zip ntuple_zip.cxx LIBRARIES ROOTDataFrame ROOTNTuple MathCore CustomStruct)
 
 ROOT_ADD_GTEST(rfield_class rfield_class.cxx LIBRARIES ROOTDataFrame ROOTNTuple MathCore CustomStruct)
+ROOT_ADD_GTEST(rfield_optional rfield_optional.cxx LIBRARIES ROOTDataFrame ROOTNTuple MathCore CustomStruct)
 ROOT_ADD_GTEST(rfield_string rfield_string.cxx LIBRARIES ROOTDataFrame ROOTNTuple MathCore CustomStruct)
 ROOT_ADD_GTEST(rfield_variant rfield_variant.cxx LIBRARIES ROOTDataFrame ROOTNTuple MathCore CustomStruct)
 ROOT_ADD_GTEST(rfield_vector rfield_vector.cxx LIBRARIES ROOTDataFrame ROOTNTuple MathCore CustomStruct)
